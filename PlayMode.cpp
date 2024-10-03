@@ -7,21 +7,33 @@
 #include "Load.hpp"
 #include "gl_errors.hpp"
 #include "data_path.hpp"
+#include "load_save_png.hpp"
+#include  "TextureProgram.hpp"
+#include "SpecialColorProgram.hpp"
 
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
+
 
 #include <random>
 
 GLuint phonebank_meshes_for_lit_color_texture_program = 0;
 Load< MeshBuffer > phonebank_meshes(LoadTagDefault, []() -> MeshBuffer const * {
-	MeshBuffer const *ret = new MeshBuffer(data_path("phone-bank.pnct"));
+	MeshBuffer const *ret = new MeshBuffer(data_path("street.pnct"));
 	phonebank_meshes_for_lit_color_texture_program = ret->make_vao_for_program(lit_color_texture_program->program);
 	return ret;
 });
 
+GLuint phonebank_meshes_for_special_color_program = 0;
+Load< MeshBuffer > meshes_special(LoadTagDefault, []() -> MeshBuffer const * {
+	MeshBuffer const *ret = new MeshBuffer(data_path("street.pnct"));
+	phonebank_meshes_for_special_color_program = ret->make_vao_for_program(special_color_program->program);
+	return ret;
+});
+
+
 Load< Scene > phonebank_scene(LoadTagDefault, []() -> Scene const * {
-	return new Scene(data_path("phone-bank.scene"), [&](Scene &scene, Scene::Transform *transform, std::string const &mesh_name){
+	return new Scene(data_path("street.scene"), [&](Scene &scene, Scene::Transform *transform, std::string const &mesh_name){
 		Mesh const &mesh = phonebank_meshes->lookup(mesh_name);
 
 		scene.drawables.emplace_back(transform);
@@ -34,20 +46,146 @@ Load< Scene > phonebank_scene(LoadTagDefault, []() -> Scene const * {
 		drawable.pipeline.start = mesh.start;
 		drawable.pipeline.count = mesh.count;
 
+		drawable.pipeline2 = special_color_program_pipeline;
+		drawable.pipeline2.vao = phonebank_meshes_for_special_color_program;
+		drawable.pipeline2.type = mesh.type;
+		drawable.pipeline2.start = mesh.start;
+		drawable.pipeline2.count = mesh.count;
+
 	});
 });
 
 WalkMesh const *walkmesh = nullptr;
 Load< WalkMeshes > phonebank_walkmeshes(LoadTagDefault, []() -> WalkMeshes const * {
-	WalkMeshes *ret = new WalkMeshes(data_path("phone-bank.w"));
+	WalkMeshes *ret = new WalkMeshes(data_path("street.w"));
 	walkmesh = &ret->lookup("WalkMesh");
 	return ret;
 });
 
+void PlayMode::addTextures()
+{
+	size_t path_index = 0;
+
+	for (TexStruct *tex_ : textures)
+	{
+		assert(tex_);
+		auto &tex = *tex_;
+		
+		// from in-class example
+		glGenTextures(1, &tex.tex); 
+		{
+			//load texture data as RGBA from a file:
+			std::vector< glm::u8vec4 > data;
+			glm::uvec2 size;
+
+			load_png(data_path(paths[path_index]), &size, &data, LowerLeftOrigin);
+
+			glBindTexture(GL_TEXTURE_2D, tex.tex);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size.x, size.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+			glGenerateMipmap(GL_TEXTURE_2D);
+			glBindTexture(GL_TEXTURE_2D, 0);
+
+			// texture, level, color scheme, width height, border
+			// add border bc sometimes it can get weird in linear sampling, more control over interpolation
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size.x, size.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			// maybe some aliasing, sampling lower detail than the texture
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+
+			glBindTexture(GL_TEXTURE_2D, 0);
+		};
+
+		glGenBuffers(1, &tex.tristrip_buffer);
+		{
+			glGenVertexArrays(1, &tex.tristrip_buffer_for_texture_program_vao); 
+			// make buffer of pos tex vertices
+			glBindVertexArray(tex.tristrip_buffer_for_texture_program_vao);
+			glBindBuffer(GL_ARRAY_BUFFER, tex.tristrip_buffer);
+
+			//size, type, normalize, stride, offset <-- recall from reading
+			// these are postex vertices
+			glVertexAttribPointer(texture_program->Position_vec4,
+				3,
+				GL_FLOAT,
+				GL_FALSE,
+				sizeof(PosTexVertex),
+				(GLbyte*)0 + offsetof(PosTexVertex, Position)
+			);
+
+			glEnableVertexAttribArray(texture_program->Position_vec4);
+
+			//size, type, normalize, stride, offset <-- recall from reading
+			// these are postex vertices
+			glVertexAttribPointer(texture_program->TexCoord_vec2,
+				2,
+				GL_FLOAT,
+				GL_FALSE,
+				sizeof(PosTexVertex),
+				(GLbyte*)0 + offsetof(PosTexVertex, TexCoord)
+			);
+
+			glEnableVertexAttribArray(texture_program->TexCoord_vec2);
+
+
+			glBindBuffer(GL_ARRAY_BUFFER, 0);
+			glBindVertexArray(0);
+		} 
+		path_index++;
+	}
+
+	
+
+	
+}
+
 PlayMode::PlayMode() : scene(*phonebank_scene) {
+	// get pointers
+	for (auto &transform : scene.transforms) {
+		if (transform.name == "Bubbles") 
+		{
+			bubbles.transform = &transform;
+			bubbles.original_position = transform.position;
+		}
+
+		if (transform.name == "LibraryDoor") 
+		{
+			libraryDoor.transform = &transform;
+			libraryDoor.original_position = transform.position;
+			libraryDoor.canOpen = true;
+			libraryDoor.isClosed = true;
+			libraryDoor.transition_time = 2.0f;
+			libraryDoor.currTime = -1.0f;
+		}
+
+		if (transform.name == "Book") 
+		{
+			book.transform = &transform;
+		}
+
+		if (transform.name == "Beans") 
+		{
+			coffee.transform = &transform;
+		}
+
+		if (transform.name == "Spices") 
+		{
+			pumpkin_spice.transform = &transform;
+		}
+	
+	}
+
 	//create a player transform:
 	scene.transforms.emplace_back();
 	player.transform = &scene.transforms.back();
+
+	player.transform->position.y = -12.0f;
+	player.transform->rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 1.0f, 0.0f));;
 
 	//create a player camera attached to a child of the player transform:
 	scene.transforms.emplace_back();
@@ -55,6 +193,7 @@ PlayMode::PlayMode() : scene(*phonebank_scene) {
 	player.camera = &scene.cameras.back();
 	player.camera->fovy = glm::radians(60.0f);
 	player.camera->near = 0.01f;
+
 	player.camera->transform->parent = player.transform;
 
 	//player's eyes are 1.8 units above the ground:
@@ -65,6 +204,13 @@ PlayMode::PlayMode() : scene(*phonebank_scene) {
 
 	//start player walking at nearest walk point:
 	player.at = walkmesh->nearest_walk_point(player.transform->position);
+
+	// textures
+	// from in-class example
+
+	addTextures();
+
+
 
 }
 
@@ -93,7 +239,10 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			down.downs += 1;
 			down.pressed = true;
 			return true;
-		}
+		} else if (evt.key.keysym.sym == SDLK_SPACE) {
+			space.pressed = true;
+			return true;
+		} 
 	} else if (evt.type == SDL_KEYUP) {
 		if (evt.key.keysym.sym == SDLK_a) {
 			left.pressed = false;
@@ -107,6 +256,27 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 		} else if (evt.key.keysym.sym == SDLK_s) {
 			down.pressed = false;
 			return true;
+		} else if (evt.key.keysym.sym == SDLK_SPACE) {
+			space.pressed = false;
+			if (!player.inventory[0] && selectedObject == 1)
+			{
+				player.inventory[0] = true;
+				selectedObject = 0;
+				book.transform->position.z = -100.0f;
+			}
+			if (!player.inventory[1] && selectedObject == 2)
+			{
+				player.inventory[1] = true;
+				selectedObject = 0;
+				coffee.transform->position.z = -100.0f;
+			}
+			if (!player.inventory[2] && selectedObject == 3)
+			{
+				player.inventory[2] = true;
+				selectedObject = 0;
+				pumpkin_spice.transform->position.z = -100.0f;
+			}
+			return true;
 		}
 	} else if (evt.type == SDL_MOUSEBUTTONDOWN) {
 		if (SDL_GetRelativeMouseMode() == SDL_FALSE) {
@@ -116,8 +286,8 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 	} else if (evt.type == SDL_MOUSEMOTION) {
 		if (SDL_GetRelativeMouseMode() == SDL_TRUE) {
 			glm::vec2 motion = glm::vec2(
-				evt.motion.xrel / float(window_size.y),
-				-evt.motion.yrel / float(window_size.y)
+				evt.motion.xrel / (float(window_size.y)*2.0f),
+				-evt.motion.yrel / (float(window_size.y)*2.0f)
 			);
 			glm::vec3 upDir = walkmesh->to_world_smooth_normal(player.at);
 			player.transform->rotation = glm::angleAxis(-motion.x * player.camera->fovy, upDir) * player.transform->rotation;
@@ -132,6 +302,25 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			return true;
 		}
 	}
+
+	bool isFirst = true;
+	for (TexStruct *tex_ : textures)
+	{
+		assert(tex_);
+		auto &tex = *tex_;
+
+		if (isFirst)
+		{
+			tex.relativeSizeX = window_size.x > 0.0f ? 1000.0f/window_size.x : tex.relativeSizeX;
+			tex.relativeSizeY = window_size.y > 0.0f ? 200.0f/window_size.y : tex.relativeSizeY;
+			isFirst = false;
+		} else {
+			tex.relativeSizeX = window_size.x > 0.0f ? 250.0f/window_size.x : tex.relativeSizeX;
+			tex.relativeSizeY = window_size.y > 0.0f ? 250.0f/window_size.y : tex.relativeSizeY;
+		}
+	}
+
+
 
 	return false;
 }
@@ -166,6 +355,7 @@ void PlayMode::update(float elapsed) {
 				remain = glm::vec3(0.0f);
 				break;
 			}
+			
 			//some step remains:
 			remain *= (1.0f - time);
 			//try to step over edge:
@@ -175,6 +365,7 @@ void PlayMode::update(float elapsed) {
 				player.at = end;
 				//rotate step to follow surface:
 				remain = rotation * remain;
+
 			} else {
 				//ran into a wall, bounce / slide along it:
 				glm::vec3 const &a = walkmesh->vertices[player.at.indices.x];
@@ -193,6 +384,8 @@ void PlayMode::update(float elapsed) {
 					//if it's just pointing along the edge, bend slightly away from wall:
 					remain += 0.01f * d * in;
 				}
+
+
 			}
 		}
 
@@ -222,11 +415,204 @@ void PlayMode::update(float elapsed) {
 		*/
 	}
 
+	// do scene animations
+	{
+		animTime += elapsed;
+		if (animTime > 10.0f)
+		{
+			animTime -= 10.0f;
+		}
+		bubbles.transform->position.z = bubbles.original_position.z + std::sin((animTime*float(M_PI))/10.0f);
+
+		// idea from https://stackoverflow.com/questions/3232318/sphere-sphere-collision-detection-reaction
+		auto sphereCollision = [&](glm::vec3 center1, float radius1, glm::vec3 center2, float radius2)
+		{
+			float dist_squared = pow(glm::length(center1-center2),2.0f);
+			float radii_squared = pow(radius1+radius2,2.0f);
+
+
+			return dist_squared < radii_squared;
+		};
+
+		// selecting objects
+		if (sphereCollision(player.transform->position, 1.0f, book.transform->position, 2.0f))
+		{
+			selectedObject = 1;
+		} else if (sphereCollision(player.transform->position, 1.0f, coffee.transform->position, 2.0f))
+		{ 
+			selectedObject = 2;
+		} else if (sphereCollision(player.transform->position, 1.0f, pumpkin_spice.transform->position, 2.0f))
+		{ 
+			selectedObject = 3;
+		} else if (selectedObject != 0)
+		{
+			selectedObject = 0;
+		}
+
+		// door animations
+		if (libraryDoor.canOpen)
+		{
+			bool isCollide = sphereCollision(player.transform->position, 1.0f, libraryDoor.original_position, 5.0f);
+			if(libraryDoor.isClosed &&
+				isCollide)
+			{
+
+				if (libraryDoor.currTime < 0.0f)
+				{
+					libraryDoor.currTime = 0.0f;
+				}
+
+				libraryDoor.currTime += elapsed;
+					
+				if (libraryDoor.transition_time >= libraryDoor.currTime)
+				{
+						libraryDoor.transform->position.y = libraryDoor.original_position.y 
+						+ 5.0f*(libraryDoor.currTime/libraryDoor.transition_time);
+
+				} else {
+					libraryDoor.currTime = -1.0f;
+					libraryDoor.isClosed = false;
+
+				}
+			
+			} else if (!libraryDoor.isClosed && 
+						!isCollide)
+			{
+				if (libraryDoor.currTime < 0.0f)
+				{
+					libraryDoor.currTime = libraryDoor.transition_time;
+				}
+
+				libraryDoor.currTime -= elapsed;
+				
+				if (libraryDoor.currTime >= 0.0f)
+				{
+						libraryDoor.transform->position.y = libraryDoor.original_position.y 
+						+ 5.0f*(libraryDoor.currTime/libraryDoor.transition_time);
+
+				} else {
+					libraryDoor.currTime = -1.0f;
+					libraryDoor.isClosed = true;
+				}
+			} else if (libraryDoor.isClosed && 
+						libraryDoor.currTime > 0.0f &&
+						!isCollide)
+			{
+
+				libraryDoor.currTime -= elapsed;
+
+				
+				if (libraryDoor.currTime >= 0.0f)
+				{
+						libraryDoor.transform->position.y = libraryDoor.original_position.y 
+						+ 5.0f*(libraryDoor.currTime/libraryDoor.transition_time);
+
+				} else {
+					std::cout << "here2" << std::endl;
+
+					libraryDoor.currTime = -1.0f;
+				}
+			}
+		}
+		
+
+	}
+
 	//reset button press counters:
 	left.downs = 0;
 	right.downs = 0;
 	up.downs = 0;
 	down.downs = 0;
+
+	// texture update tristrip
+	{
+		auto texUpdate = [&] (TexStruct *tex, bool rightAligned, float offset){
+		// don't do this if back face culling
+		std::vector<PosTexVertex> verts;
+
+		// pin to right corner
+		if (rightAligned)
+		{
+			verts.emplace_back(PosTexVertex{
+			.Position = glm::vec3(1.0f-tex->relativeSizeX, 1.0f-tex->relativeSizeY, 0.0f),
+			.TexCoord = glm::vec2(0.0f, 0.0f),
+			});
+
+			verts.emplace_back(PosTexVertex{
+				.Position = glm::vec3(1.0f-tex->relativeSizeX, 1.0f, 0.0f),
+				.TexCoord = glm::vec2(0.0f, 1.0f),
+			});
+
+			verts.emplace_back(PosTexVertex{
+				.Position = glm::vec3(1.0f, 1.0f-tex->relativeSizeY, 0.0f),
+				.TexCoord = glm::vec2(1.0f, 0.0f),
+			});
+
+			verts.emplace_back(PosTexVertex{
+				.Position = glm::vec3(1.0f, 1.0f, 0.0f),
+				.TexCoord = glm::vec2(1.0f, 1.0f),
+			});
+
+		} else {
+			// pin to left corner (for inventory items)
+			verts.emplace_back(PosTexVertex{
+			.Position = glm::vec3(-1.0f+(offset*tex->relativeSizeX), 1.0f - tex->relativeSizeY, 0.0f),
+			.TexCoord = glm::vec2(0.0f, 0.0f),
+			});
+
+			verts.emplace_back(PosTexVertex{
+				.Position = glm::vec3(-1.0f+(offset*tex->relativeSizeX), 1.0f, 0.0f),
+				.TexCoord = glm::vec2(0.0f, 1.0f),
+			});
+
+			verts.emplace_back(PosTexVertex{
+				.Position = glm::vec3(-1.0f+tex->relativeSizeX+(offset*tex->relativeSizeX), 1.0f - tex->relativeSizeY, 0.0f),
+				.TexCoord = glm::vec2(1.0f, 0.0f),
+			});
+
+			verts.emplace_back(PosTexVertex{
+				.Position = glm::vec3(-1.0f+tex->relativeSizeX+(offset*tex->relativeSizeX), 1.0f, 0.0f),
+				.TexCoord = glm::vec2(1.0f, 1.0f),
+			});
+
+		}
+
+
+	glBindBuffer(GL_ARRAY_BUFFER, tex->tristrip_buffer);
+
+	// tells us update:  GL_STREAM_DRAW, stream = update once a frame, draw = what we're gonna do
+	// could read, draw copy etc.
+	// worst case, run slower, telling about gpu memory, fast for static or stream from memory
+	glBufferData(GL_ARRAY_BUFFER, verts.size()*sizeof(verts[0]), verts.data(), GL_STREAM_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	tex->count = verts.size();
+	};
+
+	texUpdate(&tex_example, true, 0);
+
+	if (!player.inventory[0])
+	{
+		texUpdate(&inventory1, false, 0);
+	} else {
+		texUpdate(&inventory1f, false, 0);
+	}
+
+	if (!player.inventory[1])
+	{
+		texUpdate(&inventory2, false, 1);
+	} else {
+		texUpdate(&inventory2f, false, 1);
+	}
+
+	if (!player.inventory[2])
+	{
+		texUpdate(&inventory3, false, 2);
+	} else {
+		texUpdate(&inventory3f, false, 2);
+	}
+	
+	}
 }
 
 void PlayMode::draw(glm::uvec2 const &drawable_size) {
@@ -248,7 +634,7 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 	glEnable(GL_DEPTH_TEST);
 	glDepthFunc(GL_LESS); //this is the default depth comparison function, but FYI you can change it.
 
-	scene.draw(*player.camera);
+	scene.draw(*player.camera, selectedObjectNames[selectedObject]);
 
 	/* In case you are wondering if your walkmesh is lining up with your scene, try:
 	{
@@ -262,6 +648,50 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 	}
 	*/
 
+{
+	// from in-class example
+
+		// TODO: add alpha
+
+		
+		auto drawTex = [&](TexStruct *tex) {
+
+			glUseProgram(texture_program->program);
+			glBindVertexArray(tex->tristrip_buffer_for_texture_program_vao);
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, tex->tex);
+			// number, transposed or not
+			glUniformMatrix4fv(texture_program->CLIP_FROM_LOCAL_mat4, 1, GL_FALSE, glm::value_ptr(tex->CLIP_FROM_LOCAL));
+			glDrawArrays(GL_TRIANGLE_STRIP, 0, tex->count);
+			glBindTexture(GL_TEXTURE_2D, 0);
+			glBindVertexArray(0);
+			glUseProgram(0);
+		};
+
+		drawTex(&tex_example);
+		if (!player.inventory[0])
+		{
+			drawTex(&inventory1);
+		} else {
+			drawTex(&inventory1f);
+		}
+		
+		if (!player.inventory[1])
+		{
+			drawTex(&inventory2);
+		} else {
+			drawTex(&inventory2f);
+		}
+		
+		if (!player.inventory[2])
+		{
+			drawTex(&inventory3);
+		} else {
+			drawTex(&inventory3f);
+		}
+		
+}
+
 	{ //use DrawLines to overlay some text:
 		glDisable(GL_DEPTH_TEST);
 		float aspect = float(drawable_size.x) / float(drawable_size.y);
@@ -273,12 +703,12 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 		));
 
 		constexpr float H = 0.09f;
-		lines.draw_text("Mouse motion looks; WASD moves; escape ungrabs mouse",
+		lines.draw_text("Mouse motion looks; WASD moves; escape ungrabs mouse; space to pick up objects",
 			glm::vec3(-aspect + 0.1f * H, -1.0 + 0.1f * H, 0.0),
 			glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
 			glm::u8vec4(0x00, 0x00, 0x00, 0x00));
 		float ofs = 2.0f / drawable_size.y;
-		lines.draw_text("Mouse motion looks; WASD moves; escape ungrabs mouse",
+		lines.draw_text("Mouse motion looks; WASD moves; escape ungrabs mouse; space to pick up objects",
 			glm::vec3(-aspect + 0.1f * H + ofs, -1.0 + + 0.1f * H + ofs, 0.0),
 			glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
 			glm::u8vec4(0xff, 0xff, 0xff, 0x00));

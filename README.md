@@ -1,8 +1,8 @@
-# (TODO: your game's title)
+# Spooky Hill
 
-Author: (TODO: your name)
+Author: Emily Amspoker
 
-Design: (TODO: In two sentences or fewer, describe what is new and interesting about your game.)
+Design: You are a ghost trying to brew your favorite potion (a pumpkin spice latte) in a spooky version of Squirrel Hill. I don't know of a game that does this.
 
 Screen Shot:
 
@@ -10,9 +10,9 @@ Screen Shot:
 
 How To Play:
 
-(TODO: describe the controls and (if needed) goals/strategy.)
+WASD to walk, space to pick up materials for your potion (they should light up when you're close enough to pick them up). Right now nothing happens if you gather all the materials. 
 
-Sources: (TODO: list a source URL for any assets you did not create yourself. Make sure you have a license for the asset.)
+Sources: n/a.
 
 This game was built with [NEST](NEST.md).
 

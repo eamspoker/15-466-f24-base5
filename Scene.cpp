@@ -80,19 +80,22 @@ glm::mat4 Scene::Camera::make_projection() const {
 //-------------------------
 
 
-void Scene::draw(Camera const &camera) const {
+void Scene::draw(Camera const &camera, std::string selected_building) const {
 	assert(camera.transform);
 	glm::mat4 world_to_clip = camera.make_projection() * glm::mat4(camera.transform->make_world_to_local());
 	glm::mat4x3 world_to_light = glm::mat4x3(1.0f);
-	draw(world_to_clip, world_to_light);
+	draw(world_to_clip, world_to_light, selected_building);
 }
 
-void Scene::draw(glm::mat4 const &world_to_clip, glm::mat4x3 const &world_to_light) const {
+void Scene::draw(glm::mat4 const &world_to_clip, glm::mat4x3 const &world_to_light, std::string selected_building) const {
 
 	//Iterate through all drawables, sending each one to OpenGL:
 	for (auto const &drawable : drawables) {
 		//Reference to drawable's pipeline for convenience:
-		Scene::Drawable::Pipeline const &pipeline = drawable.pipeline;
+		Scene::Drawable::Pipeline const &pipeline = 
+			(drawable.transform->name != selected_building && (drawable.transform->name == "Book" || drawable.transform->name == "Beans" || drawable.transform->name == "Spices"))
+			 ? drawable.pipeline2 : drawable.pipeline;
+
 
 		//skip any drawables without a shader program set:
 		if (pipeline.program == 0) continue;
